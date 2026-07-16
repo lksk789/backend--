@@ -293,11 +293,11 @@ async def get_recommendations(request: Request, body: schemas.RecommendRequest, 
 {{
   "comment": "메인으로 추천하는 1위 작품이 왜 위 취향과 잘 맞는지에 대한 친근하고 발랄한 추천 코멘트 (2문장 이내, 이모지 사용)",
   "mangas": [
-    {{ "id": "ai_1", "title": "1위 메인 만화 제목", "genre": "장르", "otts": ["넷플릭스", "라프텔"] }},
-    {{ "id": "ai_2", "title": "2위 서브 만화 제목", "genre": "장르", "otts": [] }},
-    {{ "id": "ai_3", "title": "3위 서브 만화 제목", "genre": "장르", "otts": [] }},
-    {{ "id": "ai_4", "title": "4위 서브 만화 제목", "genre": "장르", "otts": [] }},
-    {{ "id": "ai_5", "title": "5위 서브 만화 제목", "genre": "장르", "otts": [] }}
+    {{ "id": "ai_1", "title": "1위 메인 만화 제목", "genre": "장르", "reason": "이 작품을 추천하는 이유 (1문장, 이모지 포함)", "otts": ["넷플릭스", "라프텔"] }},
+    {{ "id": "ai_2", "title": "2위 서브 만화 제목", "genre": "장르", "reason": "이 작품을 추천하는 이유 (1문장, 이모지 포함)", "otts": [] }},
+    {{ "id": "ai_3", "title": "3위 서브 만화 제목", "genre": "장르", "reason": "이 작품을 추천하는 이유 (1문장, 이모지 포함)", "otts": [] }},
+    {{ "id": "ai_4", "title": "4위 서브 만화 제목", "genre": "장르", "reason": "이 작품을 추천하는 이유 (1문장, 이모지 포함)", "otts": [] }},
+    {{ "id": "ai_5", "title": "5위 서브 만화 제목", "genre": "장르", "reason": "이 작품을 추천하는 이유 (1문장, 이모지 포함)", "otts": [] }}
   ]
 }}
 """

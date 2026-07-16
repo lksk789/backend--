@@ -27,6 +27,7 @@ class RecommendManga(BaseModel):
     title: str
     genre: str
     description: Optional[str] = None
+    reason: Optional[str] = None
     tags: Optional[List[str]] = []
     imageUrl: Optional[str] = None
     otts: Optional[List[str]] = []
