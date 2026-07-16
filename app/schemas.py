@@ -100,3 +100,12 @@ class BalanceQuestionItem(BaseModel):
 class BalanceQuestionsResponse(BaseModel):
     status: str
     data: List[BalanceQuestionItem]
+
+# --- Ranking Reasons ---
+class RankingReasonItem(BaseModel):
+    title: str
+    reason: str
+
+class RankingReasonsResponse(BaseModel):
+    status: str
+    data: List[RankingReasonItem]

@@ -77,6 +77,50 @@ def get_ranking(request: Request, limit: int = 10, db: Session = Depends(get_db)
         ))
     return schemas.RankingResponse(status="success", data=data)
 
+@app.get("/api/v1/mangas/ranking/reasons", response_model=schemas.RankingReasonsResponse)
+@limiter.limit("10/minute")
+async def get_ranking_reasons(request: Request, db: Session = Depends(get_db)):
+    """랭킹 TOP 10 작품에 대해 AI가 생성한 '사람들이 좋아하는 이유'를 반환합니다."""
+    # 1. 캐시 확인 (24시간 유효)
+    cache_key = "ranking_reasons_v1"
+    cached = crud.get_cached_curation(db, cache_key)
+    if cached:
+        reasons = cached.manga_ids.get("reasons", []) if isinstance(cached.manga_ids, dict) else []
+        return schemas.RankingReasonsResponse(status="success", data=[schemas.RankingReasonItem(**r) for r in reasons])
+
+    # 2. 현재 랭킹 TOP 10 가져오기
+    stats = crud.get_top_ranking(db, limit=10)
+    titles = [stat.manga.title for stat in stats if stat.manga]
+    if not titles:
+        return schemas.RankingReasonsResponse(status="success", data=[])
+
+    titles_str = "\n".join([f"{i+1}. {t}" for i, t in enumerate(titles)])
+    prompt = f"""다음은 사용자들이 가장 많이 추천한 만화 TOP {len(titles)} 목록입니다:
+{titles_str}
+
+각 작품에 대해, 독자들이 이 작품을 좋아하는 이유를 친근하고 감성적인 톤으로 1~2문장으로 작성해주세요.
+이모지를 자연스럽게 활용하고, "~한 점이 매력적이에요", "~때문에 빠져들 수밖에 없어요" 같은 표현을 사용하세요.
+반드시 아래의 순수 JSON 배열 형식으로만 응답해야 합니다. 백틱이나 부연 설명은 절대 금지합니다.
+[
+  {{"title": "작품 제목", "reason": "사람들이 좋아하는 이유"}}
+]
+배열의 길이는 정확히 {len(titles)}이어야 합니다.
+"""
+    try:
+        text = await call_gemini(prompt)
+        json_str = text.replace("```json", "").replace("```", "").strip()
+        reasons = json.loads(json_str)
+
+        # 캐시 저장
+        crud.save_curation_cache(db, cache_key, {"reasons": reasons}, "")
+
+        return schemas.RankingReasonsResponse(
+            status="success",
+            data=[schemas.RankingReasonItem(**r) for r in reasons]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/v1/admin/fill_otts")
 @limiter.limit("3/minute")  # BUG FIX: rate limit 추가 (남용 방지)
 async def fill_missing_otts(request: Request, db: Session = Depends(get_db)):
