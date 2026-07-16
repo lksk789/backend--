@@ -20,12 +20,14 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
+ALADIN_LIST_URL = "https://www.aladin.co.kr/ttb/api/ItemList.aspx"
 
 async def call_gemini(prompt: str) -> str:
     if not settings.GEMINI_API_KEY:
@@ -117,6 +119,75 @@ OTT가 없으면 빈 배열을 반환하세요. OTT는 넷플릭스, 라프텔, 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/v1/admin/collect_aladin")
+@limiter.limit("3/minute")
+async def collect_aladin_mangas(request: Request, pages: int = 2, db: Session = Depends(get_db)):
+    """알라딘에서 만화를 가져와 mangas 테이블에 저장합니다.
+
+    베스트셀러(명작·인기작)와 신간(최신작)을 함께 수집해, 풀이 최신작으로만
+    치우치지 않고 유명작과 새 작품이 골고루 섞이게 합니다.
+    pages: 각 목록에서 가져올 페이지 수 (한 페이지=50개).
+    """
+    if not settings.ALADIN_API_KEY:
+        raise HTTPException(status_code=500, detail="ALADIN_API_KEY가 설정되지 않았습니다.")
+
+    query_types = ["Bestseller", "ItemNewAll"]  # 인기작 + 최신작
+    collected = 0
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for query_type in query_types:
+            for page in range(1, pages + 1):
+                params = {
+                    "ttbkey": settings.ALADIN_API_KEY,
+                    "QueryType": query_type,
+                    "CategoryId": 2551,          # 만화/라이트노벨
+                    "SearchTarget": "Book",
+                    "MaxResults": 50,
+                    "start": page,
+                    "output": "js",
+                    "Version": "20131101",
+                }
+                resp = await client.get(ALADIN_LIST_URL, params=params)
+                resp.raise_for_status()
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = json.loads(resp.text)
+
+                items = data.get("item", [])
+                if not items:
+                    break
+
+                for it in items:
+                    title = (it.get("title") or "").strip()
+                    if not title:
+                        continue
+                    isbn = it.get("isbn13") or it.get("isbn") or title
+                    pub = it.get("pubDate") or ""
+                    year = int(pub[:4]) if pub[:4].isdigit() else 0
+                    payload = schemas.MangaPayload(
+                        id=f"aladin-{isbn}",
+                        title=title[:200],
+                        genre=(it.get("categoryName") or "만화")[:50],
+                        author=(it.get("author") or "")[:100],
+                        releaseYear=year,
+                        imageUrl=it.get("cover") or "",
+                        description=it.get("description") or "",
+                        otts=[],
+                    )
+                    try:
+                        m = crud._upsert_manga(db, payload)
+                        stat = db.query(models.MangaStat).filter(models.MangaStat.manga_id == m.id).first()
+                        if not stat:
+                            db.add(models.MangaStat(manga_id=m.id, total_score=0, balance_picks=0, world_cup_wins=0))
+                            db.commit()
+                        collected += 1
+                    except Exception:
+                        db.rollback()
+                        continue
+
+    return {"status": "success", "collected": collected, "message": f"알라딘 인기작+신간 만화 {collected}건을 수집/갱신했습니다."}
+
+
 @app.post("/api/v1/mangas/worldcup/winner", response_model=schemas.GenericResponse)
 @limiter.limit("20/minute")
 def record_worldcup_winner(request: Request, body: schemas.WinnerRequest, db: Session = Depends(get_db)):
@@ -159,9 +230,19 @@ async def get_recommendations(request: Request, body: schemas.RecommendRequest, 
             )
         )
     
+    # 최신작(알라딘 등에서 수집한 신작)을 Gemini에 재료로 제공 → Gemini가 모르는 최신작도 추천 가능 (RAG)
+    recent = crud.get_recent_mangas(db, limit=40)
+    recent_list_str = "\n".join(
+        f"- {m.title} ({m.genre or '만화'})" for m in recent if m.title
+    ) or "(등록된 최신작 없음)"
+
     prompt = f"""
 당신은 만화 큐레이터입니다. 유저가 다음 취향 태그를 선택했습니다: {tags_str}.
 이 취향에 완벽하게 부합하는 만화책 단행본 5개(메인 1개, 서브 4개)를 추천해주세요.
+
+[최신작 목록] 아래는 최근 발매된 신작들입니다. 유저 취향에 맞는 작품이 있으면 이 목록에서 우선적으로 골라 포함하고, 부족하면 당신이 아는 명작으로 채워 총 5개를 구성하세요. 목록의 작품을 고를 때는 제목을 목록에 적힌 그대로 정확히 사용하세요.
+{recent_list_str}
+
 만약 추천하는 작품이 애니메이션화되어 시청 가능한 OTT(넷플릭스, 라프텔, 왓챠, 티빙, 크런치롤 등)가 있다면 "otts" 배열에 포함시켜주세요. 없다면 빈 배열을 반환하세요.
 반드시 아래의 순수 JSON 형식으로만 응답해야 하며, 응답 속도를 위해 최대한 간결하게 작성하세요.
 {{
@@ -179,16 +260,29 @@ async def get_recommendations(request: Request, body: schemas.RecommendRequest, 
         text = await call_gemini(prompt)
         json_str = text.replace("```json", "").replace("```", "").strip()
         data = json.loads(json_str)
-        
+
+        # 추천작이 DB에 있으면(=수집한 최신작) 실제 커버/설명/ID로 보강
+        mangas = data["mangas"]
+        for mg in mangas:
+            db_m = db.query(models.Manga).filter(models.Manga.title == mg.get("title")).first()
+            if db_m:
+                mg["id"] = db_m.id
+                if db_m.image_url:
+                    mg["imageUrl"] = db_m.image_url
+                if db_m.description:
+                    mg["description"] = db_m.description
+                if not mg.get("genre"):
+                    mg["genre"] = db_m.genre or "만화"
+
         # Save to cache
-        crud.save_curation_cache(db, cache_key, data["mangas"], data["comment"])
-        
+        crud.save_curation_cache(db, cache_key, mangas, data["comment"])
+
         return schemas.RecommendResponse(
-            status="success", 
+            status="success",
             data=schemas.RecommendData(
                 aiComment=data.get("comment", "추천 코멘트가 제공되지 않았습니다."),
-                mainRecommendation=schemas.RecommendManga(**data["mangas"][0]),
-                subRecommendations=[schemas.RecommendManga(**m) for m in data["mangas"][1:]]
+                mainRecommendation=schemas.RecommendManga(**mangas[0]),
+                subRecommendations=[schemas.RecommendManga(**m) for m in mangas[1:]]
             )
         )
     except Exception as e:
