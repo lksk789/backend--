@@ -26,7 +26,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 ALADIN_LIST_URL = "https://www.aladin.co.kr/ttb/api/ItemList.aspx"
 
 async def call_gemini(prompt: str) -> str:
