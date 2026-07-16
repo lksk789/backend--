@@ -37,9 +37,17 @@ def _upsert_manga(db: Session, manga_data: schemas.MangaPayload):
             db.rollback()
             m = db.query(models.Manga).filter(models.Manga.title == manga_data.title).first()
     else:
-        # 기존 레코드가 있지만 OTT 정보가 추가된 경우 업데이트
+        # 기존 레코드가 있지만 새로운 정보가 더 나은 경우 업데이트
+        updated = False
+        if manga_data.imageUrl and manga_data.imageUrl.startswith("http"):
+            if not m.image_url or not m.image_url.startswith("http"):
+                m.image_url = manga_data.imageUrl
+                updated = True
         if new_otts and not m.otts:
             m.otts = new_otts
+            updated = True
+            
+        if updated:
             db.commit()
     return m
 
