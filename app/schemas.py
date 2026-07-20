@@ -122,6 +122,7 @@ class PostCreate(BaseModel):
     link_url: Optional[str] = None
     source_name: Optional[str] = None
     admin_code: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
     @validator('link_url')
     def validate_link_url(cls, v):
@@ -136,6 +137,7 @@ class PostUpdate(BaseModel):
     link_url: Optional[str] = None
     source_name: Optional[str] = None
     admin_code: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
     @validator('link_url')
     def validate_link_url(cls, v):
@@ -152,6 +154,7 @@ class PostResponse(BaseModel):
     link_url: Optional[str] = None
     source_name: Optional[str] = None
     is_official: bool = False
+    thumbnail_url: Optional[str] = None
     comment_count: Optional[int] = 0
 
     class Config:

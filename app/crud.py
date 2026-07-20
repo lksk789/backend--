@@ -180,7 +180,8 @@ def create_post(db: Session, post: schemas.PostCreate):
         content=post.content,
         link_url=post.link_url,
         source_name=post.source_name,
-        is_official=is_official
+        is_official=is_official,
+        thumbnail_url=post.thumbnail_url
     )
     db.add(db_post)
     db.commit()
@@ -188,7 +189,7 @@ def create_post(db: Session, post: schemas.PostCreate):
     return db_post
 
 def get_posts(db: Session, skip: int = 0, limit: int = 100):
-    posts = db.query(models.Post).order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
+    posts = db.query(models.Post).order_by(models.Post.is_official.desc(), models.Post.created_at.desc()).offset(skip).limit(limit).all()
     for p in posts:
         p.comment_count = len(p.comments)
     return posts
@@ -219,6 +220,7 @@ def update_post(db: Session, post_id: uuid.UUID, post_update: schemas.PostUpdate
     db_post.link_url = post_update.link_url
     db_post.source_name = post_update.source_name
     db_post.is_official = is_official
+    db_post.thumbnail_url = post_update.thumbnail_url
     db.commit()
     db.refresh(db_post)
     return db_post

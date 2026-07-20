@@ -72,6 +72,7 @@ class Post(Base):
     link_url = Column(Text, nullable=True)
     source_name = Column(String(100), nullable=True)
     is_official = Column(Boolean, default=False)
+    thumbnail_url = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
