@@ -145,6 +145,9 @@ class PostUpdate(BaseModel):
             raise ValueError('link_url must start with http:// or https://')
         return v
 
+class PasswordVerifyRequest(BaseModel):
+    password: str
+
 class PostResponse(BaseModel):
     id: UUID
     nickname: str
