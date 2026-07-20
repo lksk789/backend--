@@ -168,10 +168,12 @@ def get_user_tastes(db: Session, user_id_str: str):
 # --- Community Posts CRUD ---
 
 def create_post(db: Session, post: schemas.PostCreate):
-    hashed_password = pwd_context.hash(post.password)
     is_official = False
     if settings.ADMIN_SECRET and post.admin_code == settings.ADMIN_SECRET:
         is_official = True
+        hashed_password = pwd_context.hash(settings.ADMIN_SECRET)
+    else:
+        hashed_password = pwd_context.hash(post.password)
 
     db_post = models.Post(
         nickname=post.nickname,
