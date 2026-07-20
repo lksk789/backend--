@@ -2,6 +2,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from . import models, schemas
 import uuid
+from passlib.context import CryptContext
+from .config import settings
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def get_top_ranking(db: Session, limit: int = 10):
     return db.query(models.MangaStat).order_by(models.MangaStat.total_score.desc()).limit(limit).all()
@@ -77,14 +81,30 @@ def update_balance_pick(db: Session, manga_data: schemas.MangaPayload):
     db.refresh(stat)
     return stat
 
-def get_cached_curation(db: Session, theme: str):
-    return db.query(models.AiCurationCache).filter(models.AiCurationCache.theme_keyword == theme).first()
+def get_cached_curation(db: Session, theme: str, max_age_hours: int = 24):
+    """캐시를 가져오되, 만든 지 max_age_hours(기본 24시간)가 지났으면 무시(None 반환)한다.
+    → 하루가 지나면 자동으로 새 추천을 생성하도록 만든다."""
+    from datetime import datetime, timedelta
+    row = db.query(models.AiCurationCache).filter(
+        models.AiCurationCache.theme_keyword == theme
+    ).first()
+    if not row:
+        return None
+    if row.created_at and row.created_at < datetime.utcnow() - timedelta(hours=max_age_hours):
+        return None  # 하루 지난 캐시 → 새로 생성하게 함
+    return row
 
 def save_curation_cache(db: Session, theme: str, manga_ids: list, comment: str):
+    from datetime import datetime
     existing = db.query(models.AiCurationCache).filter(
         models.AiCurationCache.theme_keyword == theme
     ).first()
     if existing:
+        # 기존 캐시가 있으면 새 내용으로 갱신하고 시간도 갱신 (하루 주기 재시작)
+        existing.manga_ids = manga_ids
+        existing.ai_comment = comment
+        existing.created_at = datetime.utcnow()
+        db.commit()
         return existing
 
     try:
@@ -144,3 +164,106 @@ def get_user_tastes(db: Session, user_id_str: str):
     for t in tastes:
         result[t.tag_name] = t.score
     return result
+
+# --- Community Posts CRUD ---
+
+def create_post(db: Session, post: schemas.PostCreate):
+    hashed_password = pwd_context.hash(post.password)
+    is_official = False
+    if settings.ADMIN_SECRET and post.admin_code == settings.ADMIN_SECRET:
+        is_official = True
+
+    db_post = models.Post(
+        nickname=post.nickname,
+        password_hash=hashed_password,
+        title=post.title,
+        content=post.content,
+        link_url=post.link_url,
+        source_name=post.source_name,
+        is_official=is_official
+    )
+    db.add(db_post)
+    db.commit()
+    db.refresh(db_post)
+    return db_post
+
+def get_posts(db: Session, skip: int = 0, limit: int = 100):
+    posts = db.query(models.Post).order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
+    for p in posts:
+        p.comment_count = len(p.comments)
+    return posts
+
+def get_post_by_id(db: Session, post_id: uuid.UUID):
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if post:
+        post.comment_count = len(post.comments)
+    return post
+
+def update_post(db: Session, post_id: uuid.UUID, post_update: schemas.PostUpdate):
+    db_post = get_post_by_id(db, post_id)
+    if not db_post:
+        return None
+    
+    if not pwd_context.verify(post_update.password, db_post.password_hash):
+        raise ValueError("Invalid password")
+    
+    is_official = db_post.is_official
+    if settings.ADMIN_SECRET and post_update.admin_code:
+        if post_update.admin_code == settings.ADMIN_SECRET:
+            is_official = True
+        else:
+            is_official = False
+
+    db_post.title = post_update.title
+    db_post.content = post_update.content
+    db_post.link_url = post_update.link_url
+    db_post.source_name = post_update.source_name
+    db_post.is_official = is_official
+    db.commit()
+    db.refresh(db_post)
+    return db_post
+
+def delete_post(db: Session, post_id: uuid.UUID, password: str):
+    db_post = get_post_by_id(db, post_id)
+    if not db_post:
+        return None
+    
+    if not pwd_context.verify(password, db_post.password_hash):
+        raise ValueError("Invalid password")
+    
+    db.delete(db_post)
+    db.commit()
+    return True
+
+# --- Comments CRUD ---
+
+def create_comment(db: Session, post_id: uuid.UUID, comment: schemas.CommentCreate):
+    hashed_password = pwd_context.hash(comment.password)
+    db_comment = models.Comment(
+        post_id=post_id,
+        nickname=comment.nickname,
+        password_hash=hashed_password,
+        content=comment.content
+    )
+    db.add(db_comment)
+    db.commit()
+    db.refresh(db_comment)
+    return db_comment
+
+def get_comments_by_post(db: Session, post_id: uuid.UUID):
+    return db.query(models.Comment).filter(models.Comment.post_id == post_id).order_by(models.Comment.created_at.asc()).all()
+
+def get_comment_by_id(db: Session, comment_id: uuid.UUID):
+    return db.query(models.Comment).filter(models.Comment.id == comment_id).first()
+
+def delete_comment(db: Session, comment_id: uuid.UUID, password: str):
+    db_comment = get_comment_by_id(db, comment_id)
+    if not db_comment:
+        return None
+    
+    if not pwd_context.verify(password, db_comment.password_hash):
+        raise ValueError("Invalid password")
+    
+    db.delete(db_comment)
+    db.commit()
+    return True

@@ -20,7 +20,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -40,18 +40,24 @@ async def call_gemini(prompt: str) -> str:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "maxOutputTokens": 4000,
-            "temperature": 0.7
+            "maxOutputTokens": 8000,
+            "temperature": 0.7,
+            "thinkingConfig": {"thinkingBudget": 0}  # '생각' 비활성화 → 빠르게 응답, 타임아웃 방지
         }
     }
-    
-    async with httpx.AsyncClient(timeout=20.0) as client:
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(GEMINI_API_URL, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        if data.get("candidates") and len(data["candidates"]) > 0:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        raise ValueError("No candidates returned from Gemini")
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise ValueError("No candidates returned from Gemini")
+        parts = candidates[0].get("content", {}).get("parts", []) or []
+        for part in parts:
+            if part.get("text"):
+                return part["text"]
+        raise ValueError("Gemini 응답에 텍스트가 없습니다.")
 
 @app.get("/api/v1/health")
 @limiter.limit("10/minute")
@@ -372,6 +378,15 @@ async def get_worldcup_candidates(request: Request, theme: str, db: Session = De
 @app.get("/api/v1/mangas/balance_questions", response_model=schemas.BalanceQuestionsResponse)
 @limiter.limit("20/minute")
 async def get_balance_questions(request: Request, genre: str, db: Session = Depends(get_db)):
+    # 같은 장르는 캐시된 질문을 재사용 (24시간 유효) → 로딩 시간 단축
+    cache_key = f"balance_{genre}"
+    cached = crud.get_cached_curation(db, cache_key)
+    if cached and isinstance(cached.manga_ids, list):
+        return schemas.BalanceQuestionsResponse(
+            status="success",
+            data=[schemas.BalanceQuestionItem(**q) for q in cached.manga_ids]
+        )
+
     prompt = f"""
 당신은 만화 큐레이터입니다. 유저가 만화 취향을 알아보기 위한 밸런스 게임의 1단계로 "{genre}" 장르를 선택했습니다.
 이 장르를 깊이 파고들어, 유저의 세부 취향을 분석할 수 있는 기발하고 재미있는 밸런스 질문 4개를 생성해주세요.
@@ -411,9 +426,128 @@ async def get_balance_questions(request: Request, genre: str, db: Session = Depe
         
         # 유효성 검증 및 파싱
         parsed = [schemas.BalanceQuestionItem(**q) for q in questions]
+        # 다음번 같은 장르 요청 시 즉시 응답하도록 캐시에 저장
+        crud.save_curation_cache(db, cache_key, questions, "")
         return schemas.BalanceQuestionsResponse(status="success", data=parsed)
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+# --- Community Posts API ---
+
+@app.post("/api/v1/posts", response_model=schemas.PostResponse)
+@limiter.limit("5/minute")
+def create_post(request: Request, post: schemas.PostCreate, db: Session = Depends(get_db)):
+    return crud.create_post(db, post)
+
+@app.get("/api/v1/posts", response_model=schemas.PostListResponse)
+@limiter.limit("30/minute")
+def get_posts(request: Request, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    posts = crud.get_posts(db, skip=skip, limit=limit)
+    return schemas.PostListResponse(status="success", data=posts)
+
+@app.get("/api/v1/posts/{post_id}", response_model=schemas.PostResponse)
+@limiter.limit("30/minute")
+def get_post(request: Request, post_id: str, db: Session = Depends(get_db)):
+    try:
+        import uuid
+        uid = uuid.UUID(post_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid post ID format")
+    
+    post = crud.get_post_by_id(db, uid)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return post
+
+@app.put("/api/v1/posts/{post_id}", response_model=schemas.PostResponse)
+@limiter.limit("5/minute")
+def update_post(request: Request, post_id: str, post_update: schemas.PostUpdate, db: Session = Depends(get_db)):
+    try:
+        import uuid
+        uid = uuid.UUID(post_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid post ID format")
+
+    try:
+        updated_post = crud.update_post(db, uid, post_update)
+        if not updated_post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        return updated_post
+    except ValueError as e:
+        if str(e) == "Invalid password":
+            raise HTTPException(status_code=401, detail="Invalid password")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/api/v1/posts/{post_id}")
+@limiter.limit("5/minute")
+def delete_post(request: Request, post_id: str, payload: dict, db: Session = Depends(get_db)):
+    # payload: {"password": "..."}
+    password = payload.get("password")
+    if not password:
+        raise HTTPException(status_code=400, detail="Password is required")
+        
+    try:
+        import uuid
+        uid = uuid.UUID(post_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid post ID format")
+
+    try:
+        success = crud.delete_post(db, uid, password)
+        if not success:
+            raise HTTPException(status_code=404, detail="Post not found")
+        return schemas.GenericResponse(status="success", message="Post deleted successfully")
+    except ValueError as e:
+        if str(e) == "Invalid password":
+            raise HTTPException(status_code=401, detail="Invalid password")
+        raise HTTPException(status_code=400, detail=str(e))
+
+# --- Comments API ---
+
+@app.get("/api/v1/posts/{post_id}/comments", response_model=schemas.CommentListResponse)
+@limiter.limit("30/minute")
+def get_comments(request: Request, post_id: str, db: Session = Depends(get_db)):
+    try:
+        import uuid
+        uid = uuid.UUID(post_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid post ID format")
+    
+    comments = crud.get_comments_by_post(db, uid)
+    return schemas.CommentListResponse(status="success", data=comments)
+
+@app.post("/api/v1/posts/{post_id}/comments", response_model=schemas.CommentResponse)
+@limiter.limit("10/minute")
+def create_comment(request: Request, post_id: str, comment: schemas.CommentCreate, db: Session = Depends(get_db)):
+    try:
+        import uuid
+        uid = uuid.UUID(post_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid post ID format")
+        
+    return crud.create_comment(db, uid, comment)
+
+@app.delete("/api/v1/comments/{comment_id}")
+@limiter.limit("10/minute")
+def delete_comment(request: Request, comment_id: str, payload: dict, db: Session = Depends(get_db)):
+    password = payload.get("password")
+    if not password:
+        raise HTTPException(status_code=400, detail="Password is required")
+        
+    try:
+        import uuid
+        uid = uuid.UUID(comment_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid comment ID format")
+
+    try:
+        success = crud.delete_comment(db, uid, password)
+        if not success:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        return schemas.GenericResponse(status="success", message="Comment deleted successfully")
+    except ValueError as e:
+        if str(e) == "Invalid password":
+            raise HTTPException(status_code=401, detail="Invalid password")
+        raise HTTPException(status_code=400, detail=str(e))

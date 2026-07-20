@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Text, JSON, ForeignKey, DateTime
+from sqlalchemy import Column, String, Integer, Text, JSON, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
@@ -60,3 +60,32 @@ class AiCurationCache(Base):
     manga_ids = Column(JSON, nullable=False)  # List of manga ids
     ai_comment = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    nickname = Column(String(50), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    title = Column(String(200), nullable=False)
+    content = Column(Text, nullable=False)
+    link_url = Column(Text, nullable=True)
+    source_name = Column(String(100), nullable=True)
+    is_official = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    comments = relationship("Comment", back_populates="post", cascade="all, delete-orphan")
+
+class Comment(Base):
+    __tablename__ = "comments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    post_id = Column(UUID(as_uuid=True), ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    nickname = Column(String(50), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    post = relationship("Post", back_populates="comments")

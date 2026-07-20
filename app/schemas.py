@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Optional
 from uuid import UUID
 
@@ -110,3 +110,73 @@ class RankingReasonItem(BaseModel):
 class RankingReasonsResponse(BaseModel):
     status: str
     data: List[RankingReasonItem]
+
+# --- Community Posts ---
+from datetime import datetime
+
+class PostCreate(BaseModel):
+    nickname: str
+    password: str
+    title: str
+    content: str
+    link_url: Optional[str] = None
+    source_name: Optional[str] = None
+    admin_code: Optional[str] = None
+
+    @validator('link_url')
+    def validate_link_url(cls, v):
+        if v and not (v.startswith('http://') or v.startswith('https://')):
+            raise ValueError('link_url must start with http:// or https://')
+        return v
+
+class PostUpdate(BaseModel):
+    password: str
+    title: str
+    content: str
+    link_url: Optional[str] = None
+    source_name: Optional[str] = None
+    admin_code: Optional[str] = None
+
+    @validator('link_url')
+    def validate_link_url(cls, v):
+        if v and not (v.startswith('http://') or v.startswith('https://')):
+            raise ValueError('link_url must start with http:// or https://')
+        return v
+
+class PostResponse(BaseModel):
+    id: UUID
+    nickname: str
+    title: str
+    content: str
+    created_at: datetime
+    link_url: Optional[str] = None
+    source_name: Optional[str] = None
+    is_official: bool = False
+    comment_count: Optional[int] = 0
+
+    class Config:
+        from_attributes = True
+
+class PostListResponse(BaseModel):
+    status: str
+    data: List[PostResponse]
+
+# --- Comments ---
+class CommentCreate(BaseModel):
+    nickname: str
+    password: str
+    content: str
+
+class CommentResponse(BaseModel):
+    id: UUID
+    post_id: UUID
+    nickname: str
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class CommentListResponse(BaseModel):
+    status: str
+    data: List[CommentResponse]

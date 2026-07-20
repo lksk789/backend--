@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str
     GEMINI_API_KEY: str = ""
     ALADIN_API_KEY: str = ""
+    ADMIN_SECRET: str = ""
 
     @property
     def cors_origins_list(self) -> List[str]:
