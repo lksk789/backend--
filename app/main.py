@@ -461,6 +461,27 @@ def get_post(request: Request, post_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Post not found")
     return post
 
+@app.post("/api/v1/posts/{post_id}/verify-password")
+@limiter.limit("10/minute")
+def verify_post_password(request: Request, post_id: str, payload: schemas.PasswordVerifyRequest, db: Session = Depends(get_db)):
+    try:
+        import uuid
+        uid = uuid.UUID(post_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid post ID format")
+    
+    # crud.delete_post logic for password check is the same, so we can just check it manually here
+    post = crud.get_post_by_id(db, uid)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+        
+    from passlib.context import CryptContext
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    if not pwd_context.verify(payload.password, post.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid password")
+        
+    return schemas.GenericResponse(status="success", message="Password verified")
+
 @app.put("/api/v1/posts/{post_id}", response_model=schemas.PostResponse)
 @limiter.limit("5/minute")
 def update_post(request: Request, post_id: str, post_update: schemas.PostUpdate, db: Session = Depends(get_db)):
